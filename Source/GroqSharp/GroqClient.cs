@@ -1,4 +1,5 @@
-﻿using GroqSharp;
+﻿using System.Net;
+using GroqSharp;
 using GroqSharp.Models;
 using GroqSharp.Tools;
 using GroqSharp.Utilities;
@@ -37,6 +38,8 @@ public class GroqClient :
     private double? _topP;
     private string? _stop;
     private Message _defaultSystemMessage;
+    private WebProxy? _proxy;
+    private HttpClientHandler? _handler;
     private int _maxStructuredRetryAttempts = 3;
     private int _maxToolInvocationDepth = 3;
 
@@ -49,8 +52,10 @@ public class GroqClient :
         string model,
         HttpClient? client = null)
     {
+        SetupParsedProxy();
+        
         _model = model;
-        _client = client ?? new HttpClient();
+        _client = client ?? (_handler == null ? new HttpClient() : new HttpClient(_handler, true));
         _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(BearerTokenPrefix, apiKey);
     }
 
@@ -167,6 +172,35 @@ public class GroqClient :
         }
 
         return toolsList;
+    }
+
+    private void SetupParsedProxy()
+    {
+        var proxyString = Environment.GetEnvironmentVariable("PROXY");
+
+        if (string.IsNullOrEmpty(proxyString))
+        {
+            return;
+        }
+
+        var proxyData = proxyString.Split(new [] { ':', '@' }, StringSplitOptions.RemoveEmptyEntries);
+
+        if (proxyData.Length != 4)
+        {
+            throw new ArgumentException("Invalid proxy string! Use 'ip:port:user:password' or 'user:password@ip:port'.");
+        }
+
+        var containsAt = proxyString.Contains('@');
+        var proxyConnectionString = containsAt ? $"{proxyData[2]}:{proxyData[3]}" : $"{proxyData[0]}:{proxyData[1]}";
+        proxyConnectionString = proxyConnectionString.Insert(0, "http://");
+
+        _proxy = new WebProxy
+        {
+            Address = new Uri(proxyConnectionString),
+            Credentials = containsAt ? new NetworkCredential(proxyData[0], proxyData[1]) : new NetworkCredential(proxyData[2], proxyData[3])
+        };
+        
+        _handler = new HttpClientHandler { Proxy = _proxy };
     }
 
     private async Task<string> HandleToolResponsesAndReinvokeAsync(
